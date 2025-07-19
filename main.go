@@ -2,41 +2,137 @@ package main
 
 import (
 	"fmt"
-	"io"
-	"net/http"
 	"os"
+	"strconv"
+
+	"github.sammcclenaghan.com/mango/grabber"
 )
 
 // FetchURLContent fetches the content from the given URL and returns it as a string.
-func FetchURLContent(url string) (string, error) {
-	resp, err := http.Get(url)
+func FetchURLContent(url string, chapterNum string) (string, error) {
+	// Create a base grabber
+	g := &grabber.Grabber{
+		URL: url,
+		Settings: grabber.Settings{
+			Language: "en", // default to English
+		},
+	}
+
+	// Create MangaDx grabber
+	mangadx := grabber.NewMangadx(g)
+
+	// Test if this is a supported site
+	isSupported, err := mangadx.Test()
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch URL: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP error: %s", resp.Status)
+		return "", fmt.Errorf("error testing site: %w", err)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	if !isSupported {
+		return "", fmt.Errorf("unsupported site: %s", url)
+	}
+
+	// Fetch the title
+	title, err := mangadx.FetchTitle()
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return "", fmt.Errorf("error fetching title: %w", err)
 	}
 
-	return string(body), nil
+	// Fetch chapters
+	chapters, errs := mangadx.FetchChapters()
+	if len(errs) > 0 {
+		return "", fmt.Errorf("errors fetching chapters: %v", errs)
+	}
+
+	// Build output string
+	output := fmt.Sprintf("Title: %s\n", title)
+	output += fmt.Sprintf("Found %d chapters:\n\n", len(chapters))
+
+	// If a specific chapter is requested, fetch its pages
+	if chapterNum != "" {
+		fmt.Printf("Debug: Looking for chapter %s\n", chapterNum)
+		fmt.Printf("Debug: Available chapters: %d\n", len(chapters))
+		return fetchSpecificChapter(mangadx, chapters, chapterNum, title)
+	}
+
+	// Otherwise, list all chapters
+	for _, chapter := range chapters {
+		output += fmt.Sprintf("Chapter %.1f: %s (%s)\n",
+			chapter.GetNumber(),
+			chapter.GetTitle(),
+			chapter.GetLanguage())
+	}
+
+	return output, nil
+}
+
+// fetchSpecificChapter fetches pages for a specific chapter
+func fetchSpecificChapter(mangadx *grabber.Mangadx, chapters grabber.Filterables, chapterNum string, title string) (string, error) {
+	// Parse the requested chapter number
+	targetChapter, err := strconv.ParseFloat(chapterNum, 64)
+	if err != nil {
+		return "", fmt.Errorf("invalid chapter number: %s", chapterNum)
+	}
+
+	// Find the matching chapter
+	var selectedChapter grabber.Filterable
+	for _, chapter := range chapters {
+		if chapter.GetNumber() == targetChapter {
+			selectedChapter = chapter
+			break
+		}
+	}
+
+	if selectedChapter == nil {
+		// List available chapters for debugging
+		availableChapters := ""
+		for _, ch := range chapters {
+			availableChapters += fmt.Sprintf("%.1f ", ch.GetNumber())
+		}
+		return "", fmt.Errorf("chapter %.1f not found. Available chapters: %s", targetChapter, availableChapters)
+	}
+
+	// Debug: Print chapter ID before fetching
+	if mangadxChap, ok := selectedChapter.(*grabber.MangadxChapter); ok {
+		fmt.Printf("Debug: Fetching chapter ID: %s\n", mangadxChap.Id)
+	}
+
+	// Fetch the chapter with its pages
+	chapterWithPages, err := mangadx.FetchChapter(selectedChapter)
+	if err != nil {
+		return "", fmt.Errorf("error fetching chapter pages: %w", err)
+	}
+
+	// Build detailed output
+	output := fmt.Sprintf("Title: %s\n", title)
+	output += fmt.Sprintf("Chapter: %.1f - %s\n", chapterWithPages.Number, chapterWithPages.Title)
+	output += fmt.Sprintf("Language: %s\n", chapterWithPages.Language)
+	output += fmt.Sprintf("Pages: %d\n\n", chapterWithPages.PagesCount)
+
+	// List all page URLs
+	for _, page := range chapterWithPages.Pages {
+		output += fmt.Sprintf("Page %d: %s\n", page.Number, page.URL)
+	}
+
+	return output, nil
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: mango <url>")
+		fmt.Println("Usage: mango <url> [chapter_number]")
+		fmt.Println("Example: mango https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece")
+		fmt.Println("Example: mango https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1")
 		return
 	}
 
 	url := os.Args[1]
-	content, err := FetchURLContent(url)
+	var chapterNum string
+	if len(os.Args) >= 3 {
+		chapterNum = os.Args[2]
+	}
+
+	content, err := FetchURLContent(url, chapterNum)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 		return
 	}
 
