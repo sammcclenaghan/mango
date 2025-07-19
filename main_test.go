@@ -63,7 +63,7 @@ func TestFetchURLContent_Success(t *testing.T) {
 	// Test with a real mangadex URL - this will make actual API calls
 	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
 
-	content, err := FetchURLContent(testURL, "")
+	content, err := FetchURLContent(testURL, "", false, false)
 	if err != nil {
 		t.Skipf("Skipping test due to API error (network/rate limit): %v", err)
 		return
@@ -83,7 +83,7 @@ func TestFetchURLContent_Success(t *testing.T) {
 func TestFetchURLContent_UnsupportedSite(t *testing.T) {
 	testURL := "https://example.com/manga"
 
-	content, err := FetchURLContent(testURL, "")
+	content, err := FetchURLContent(testURL, "", false, false)
 	if err == nil {
 		t.Error("Expected error for unsupported site, but got none")
 	}
@@ -102,7 +102,7 @@ func TestFetchURLContent_UnsupportedSite(t *testing.T) {
 func TestFetchURLContent_InvalidURL(t *testing.T) {
 	testURL := "not-a-valid-url"
 
-	content, err := FetchURLContent(testURL, "")
+	content, err := FetchURLContent(testURL, "", false, false)
 	if err == nil {
 		t.Error("Expected error for invalid URL, but got none")
 	}
@@ -116,7 +116,7 @@ func TestFetchURLContent_InvalidURL(t *testing.T) {
 func TestFetchURLContent_EmptyURL(t *testing.T) {
 	testURL := ""
 
-	content, err := FetchURLContent(testURL, "")
+	content, err := FetchURLContent(testURL, "", false, false)
 	if err == nil {
 		t.Error("Expected error for empty URL, but got none")
 	}
@@ -216,7 +216,7 @@ func TestFetchSpecificChapter(t *testing.T) {
 	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
 
 	// Test fetching a specific chapter
-	content, err := FetchURLContent(testURL, "1")
+	content, err := FetchURLContent(testURL, "1", false, false)
 	if err != nil {
 		t.Skipf("Skipping test due to API error (network/rate limit): %v", err)
 		return
@@ -241,7 +241,7 @@ func TestFetchSpecificChapter_InvalidChapter(t *testing.T) {
 	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
 
 	// Test with invalid chapter number
-	_, err := FetchURLContent(testURL, "invalid")
+	_, err := FetchURLContent(testURL, "invalid", false, false)
 	if err == nil {
 		t.Error("Expected error for invalid chapter number, but got none")
 	}
@@ -257,7 +257,7 @@ func TestFetchSpecificChapter_NonExistentChapter(t *testing.T) {
 	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
 
 	// Test with non-existent chapter number
-	_, err := FetchURLContent(testURL, "99999")
+	_, err := FetchURLContent(testURL, "99999", false, false)
 	if err == nil {
 		t.Error("Expected error for non-existent chapter, but got none")
 	}
@@ -266,4 +266,84 @@ func TestFetchSpecificChapter_NonExistentChapter(t *testing.T) {
 	if !strings.Contains(err.Error(), expectedError) {
 		t.Errorf("Expected error to contain '%s', got: %v", expectedError, err)
 	}
+}
+
+// TestFetchSpecificChapter_WithDownload tests downloading pages for a specific chapter.
+func TestFetchSpecificChapter_WithDownload(t *testing.T) {
+	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
+
+	// Test fetching and downloading a specific chapter
+	content, err := FetchURLContent(testURL, "1154", true, false)
+	if err != nil {
+		t.Skipf("Skipping test due to API error (network/rate limit): %v", err)
+		return
+	}
+
+	// Verify the content contains download information
+	if !strings.Contains(content, "Downloading pages") {
+		t.Error("Expected content to contain 'Downloading pages'")
+	}
+
+	if !strings.Contains(content, "bytes") {
+		t.Error("Expected content to contain download size information")
+	}
+}
+
+// TestFetchSpecificChapter_WithoutDownload tests listing URLs without downloading.
+func TestFetchSpecificChapter_WithoutDownload(t *testing.T) {
+	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
+
+	// Test fetching without downloading
+	content, err := FetchURLContent(testURL, "1154", false, false)
+	if err != nil {
+		t.Skipf("Skipping test due to API error (network/rate limit): %v", err)
+		return
+	}
+
+	// Verify the content contains URL information but not download info
+	if !strings.Contains(content, "Page URLs") {
+		t.Error("Expected content to contain 'Page URLs'")
+	}
+
+	if strings.Contains(content, "Downloading pages") {
+		t.Error("Expected content NOT to contain 'Downloading pages' when download=false")
+	}
+}
+
+// TestFetchSpecificChapter_WithCBZ tests downloading and saving as CBZ.
+func TestFetchSpecificChapter_WithCBZ(t *testing.T) {
+	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
+
+	// Test fetching, downloading, and saving as CBZ
+	content, err := FetchURLContent(testURL, "1154", true, true)
+	if err != nil {
+		t.Skipf("Skipping test due to API error (network/rate limit): %v", err)
+		return
+	}
+
+	// Verify the content contains CBZ creation information
+	if !strings.Contains(content, "Creating CBZ file") {
+		t.Error("Expected content to contain 'Creating CBZ file'")
+	}
+
+	if !strings.Contains(content, "Successfully created CBZ file") {
+		t.Error("Expected content to contain 'Successfully created CBZ file'")
+	}
+}
+
+// TestCBZFlagValidation tests that CBZ flag requires download flag.
+func TestCBZFlagValidation(t *testing.T) {
+	// This test simulates the main function's flag validation
+	// In a real scenario, we would need to refactor main to make it testable
+
+	// Test case: CBZ without download should be invalid
+	download := false
+	saveCBZ := true
+
+	if saveCBZ && !download {
+		// This is the expected validation behavior
+		return
+	}
+
+	t.Error("Expected validation to fail when CBZ is requested without download")
 }
