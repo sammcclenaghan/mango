@@ -35,7 +35,7 @@ type Converter struct {
 func NewConverter() *Converter {
 	return &Converter{
 		MaxConcurrency: 1, // Conservative default to avoid overwhelming the system
-		DeleteSource:   false,
+		DeleteSource:   true,
 		OutputDir:      ".",
 	}
 }
@@ -86,12 +86,63 @@ func (c *Converter) ConvertCBZToAZW3(inputFile string, outputFile string) (*Conv
 
 	result.Success = true
 
-	// Delete source file if requested and conversion was successful
-	if c.DeleteSource {
-		if err := os.Remove(inputFile); err != nil {
-			// Don't fail the conversion if we can't delete the source
-			result.Error = fmt.Errorf("conversion successful but failed to delete source file: %w", err)
-		}
+	if err := os.Remove(inputFile); err != nil {
+		// Don't fail the conversion if we can't delete the source
+		result.Error = fmt.Errorf("conversion successful but failed to delete source file: %w", err)
+	}
+
+	return result, nil
+}
+
+// ConvertCBZToEPUB converts a CBZ file to EPUB format using Calibre's ebook-convert
+func (c *Converter) ConvertCBZToEPUB(inputFile string, outputFile string) (*ConversionResult, error) {
+	result := &ConversionResult{
+		InputFile:  inputFile,
+		OutputFile: outputFile,
+	}
+
+	// Check if input file exists
+	if _, err := os.Stat(inputFile); os.IsNotExist(err) {
+		result.Error = fmt.Errorf("input file does not exist: %s", inputFile)
+		return result, result.Error
+	}
+
+	// Ensure output directory exists
+	outputDir := filepath.Dir(outputFile)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		result.Error = fmt.Errorf("failed to create output directory: %w", err)
+		return result, result.Error
+	}
+
+	// Check if ebook-convert is available
+	if err := c.checkEbookConvert(); err != nil {
+		result.Error = err
+		return result, result.Error
+	}
+
+	// Run ebook-convert command
+	cmd := exec.Command("ebook-convert", inputFile, outputFile)
+
+	// Capture output for debugging
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		result.Error = fmt.Errorf("ebook-convert failed: %w\nOutput: %s", err, string(output))
+		return result, result.Error
+	}
+
+	// Check if output file was created
+	if stat, err := os.Stat(outputFile); err != nil {
+		result.Error = fmt.Errorf("output file was not created: %s", outputFile)
+		return result, result.Error
+	} else {
+		result.BytesWritten = stat.Size()
+	}
+
+	result.Success = true
+
+	if err := os.Remove(inputFile); err != nil {
+		// Don't fail the conversion if we can't delete the source
+		result.Error = fmt.Errorf("conversion successful but failed to delete source file: %w", err)
 	}
 
 	return result, nil
@@ -178,12 +229,12 @@ func (c *Converter) ConvertCBZToMultipleFormats(inputFile string, formats []stri
 			switch strings.ToLower(format) {
 			case ".azw3":
 				result, err = c.ConvertCBZToAZW3(inputFile, outputFile)
-			case ".mobi":
-				result, err = c.convertCBZToFormat(inputFile, outputFile, "mobi")
 			case ".epub":
-				result, err = c.convertCBZToFormat(inputFile, outputFile, "epub")
+				result, err = c.ConvertCBZToFormat(inputFile, outputFile, "epub")
+			case ".mobi":
+				result, err = c.ConvertCBZToFormat(inputFile, outputFile, "mobi")
 			case ".pdf":
-				result, err = c.convertCBZToFormat(inputFile, outputFile, "pdf")
+				result, err = c.ConvertCBZToFormat(inputFile, outputFile, "pdf")
 			default:
 				result = &ConversionResult{
 					InputFile:  inputFile,
@@ -222,8 +273,8 @@ func (c *Converter) GenerateOutputPath(inputFile, extension string) string {
 	return outputFile
 }
 
-// convertCBZToFormat is a generic conversion function for any format supported by ebook-convert
-func (c *Converter) convertCBZToFormat(inputFile, outputFile, format string) (*ConversionResult, error) {
+// ConvertCBZToFormat is a generic conversion function for any format supported by ebook-convert
+func (c *Converter) ConvertCBZToFormat(inputFile, outputFile, format string) (*ConversionResult, error) {
 	result := &ConversionResult{
 		InputFile:  inputFile,
 		OutputFile: outputFile,
@@ -262,12 +313,9 @@ func (c *Converter) convertCBZToFormat(inputFile, outputFile, format string) (*C
 
 	result.Success = true
 
-	// Delete source file if requested and conversion was successful
-	if c.DeleteSource {
-		if err := os.Remove(inputFile); err != nil {
-			// Don't fail the conversion if we can't delete the source
-			result.Error = fmt.Errorf("conversion successful but failed to delete source file: %w", err)
-		}
+	if err := os.Remove(inputFile); err != nil {
+		// Don't fail the conversion if we can't delete the source
+		result.Error = fmt.Errorf("conversion successful but failed to delete source file: %w", err)
 	}
 
 	return result, nil

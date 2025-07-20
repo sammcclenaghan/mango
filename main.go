@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/user"
+	"path/filepath"
+	"strings"
 
 	"github.sammcclenaghan.com/mango/colors"
 	"github.sammcclenaghan.com/mango/converter"
@@ -13,7 +16,7 @@ import (
 )
 
 // FetchURLContent fetches the content from the given URL and returns it as a string.
-func FetchURLContent(url string, chapterRange string, download bool, saveCBZ bool, convertToAZW3 bool) (string, error) {
+func FetchURLContent(url string, chapterRange string, download bool, saveCBZ bool, convertToAZW3 bool, convertToEPUB bool, outputDir string) (string, error) {
 	// Create a base grabber
 	g := &grabber.Grabber{
 		URL: url,
@@ -55,7 +58,7 @@ func FetchURLContent(url string, chapterRange string, download bool, saveCBZ boo
 	if chapterRange != "" {
 		colors.DebugPrintf("Debug: Looking for chapter range %s\n", chapterRange)
 		colors.DebugPrintf("Debug: Available chapters: %d\n", len(chapters))
-		return fetchChapterRange(mangadx, chapters, chapterRange, title, download, saveCBZ, convertToAZW3)
+		return fetchChapterRange(mangadx, chapters, chapterRange, title, download, saveCBZ, convertToAZW3, convertToEPUB, outputDir)
 	}
 
 	// Otherwise, list all chapters
@@ -70,7 +73,7 @@ func FetchURLContent(url string, chapterRange string, download bool, saveCBZ boo
 }
 
 // fetchChapterRange fetches pages for chapters within the specified range
-func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, chapterRange string, title string, download bool, saveCBZ bool, convertToAZW3 bool) (string, error) {
+func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, chapterRange string, title string, download bool, saveCBZ bool, convertToAZW3 bool, convertToEPUB bool, outputDir string) (string, error) {
 	// Parse the chapter range
 	parsedRanges, err := ranges.Parse(chapterRange)
 	if err != nil {
@@ -126,6 +129,7 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 	// Download mode - process each chapter
 	var allFiles []*downloader.File
 	var downloadedChapters []*grabber.Chapter
+	chapterFiles := make(map[float64][]*downloader.File) // Track files by chapter number
 
 	for _, selectedChapter := range selectedChapters {
 		colors.FetchedPrintf("fetching %s chapter %.0f\n", title, selectedChapter.GetNumber())
@@ -158,6 +162,8 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 			continue
 		}
 
+		// Store files by chapter number for proper organization
+		chapterFiles[chapterWithPages.Number] = files
 		allFiles = append(allFiles, files...)
 		colors.SavedPrintf("saving %s chapter %.0f\n", title, chapterWithPages.Number)
 	}
@@ -170,6 +176,19 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 			// Single chapter - use normal filename
 			chapter := downloadedChapters[0]
 			cbzFilename := packer.GetCBZFilename(title, chapter.Number, chapter.Title)
+			if outputDir != "" {
+				cbzFilename = filepath.Join(outputDir, filepath.Base(cbzFilename))
+				// Create output directory if it doesn't exist
+				if err := os.MkdirAll(outputDir, 0755); err != nil {
+					return "", fmt.Errorf("failed to create output directory: %w", err)
+				}
+			}
+
+			// Remove existing file if it exists
+			if _, err := os.Stat(cbzFilename); err == nil {
+				os.Remove(cbzFilename)
+			}
+
 			colors.SavedPrintf("saving to cbz\n")
 
 			packingCallback := func(page, progress int) {
@@ -183,29 +202,48 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 
 			output += fmt.Sprintf("Successfully created CBZ file: %s\n", cbzFilename)
 
-			// Convert to AZW3 if requested
+			// Convert to other formats if requested
 			if convertToAZW3 {
-				output += performAZW3Conversion(cbzFilename)
+				output += performConversion(cbzFilename, ".azw3")
+			}
+			if convertToEPUB {
+				output += performConversion(cbzFilename, ".epub")
 			}
 		} else {
-			// Multiple chapters - bundle them
+			// Multiple chapters - bundle them with chapter-aware naming
 			bundleFilename := packer.GetCBZFilename(title, 0, fmt.Sprintf("Chapters %s", chapterRange))
+			if outputDir != "" {
+				bundleFilename = filepath.Join(outputDir, filepath.Base(bundleFilename))
+				// Create output directory if it doesn't exist
+				if err := os.MkdirAll(outputDir, 0755); err != nil {
+					return "", fmt.Errorf("failed to create output directory: %w", err)
+				}
+			}
+
+			// Remove existing file if it exists
+			if _, err := os.Stat(bundleFilename); err == nil {
+				os.Remove(bundleFilename)
+			}
+
 			colors.SavedPrintf("saving to cbz\n")
 
 			packingCallback := func(page, progress int) {
 				// Silent packing
 			}
 
-			err := packer.ArchiveCBZ(bundleFilename, allFiles, packingCallback)
+			err := packer.ArchiveCBZWithChapterInfo(bundleFilename, chapterFiles, packingCallback)
 			if err != nil {
 				return "", fmt.Errorf("error creating bundled CBZ file: %w", err)
 			}
 
 			output += fmt.Sprintf("Successfully created bundled CBZ file: %s\n", bundleFilename)
 
-			// Convert to AZW3 if requested
+			// Convert to other formats if requested
 			if convertToAZW3 {
-				output += performAZW3Conversion(bundleFilename)
+				output += performConversion(bundleFilename, ".azw3")
+			}
+			if convertToEPUB {
+				output += performConversion(bundleFilename, ".epub")
 			}
 		}
 	} else if !saveCBZ {
@@ -222,13 +260,13 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 	return output, nil
 }
 
-// performAZW3Conversion converts a CBZ file to AZW3 format
-func performAZW3Conversion(cbzFile string) string {
+// performConversion converts a CBZ file to the specified format
+func performConversion(cbzFile string, format string) string {
 	output := ""
 
 	// Check if ebook-convert is available
 	if !converter.IsEbookConvertAvailable() {
-		output += colors.Warning("Warning: ebook-convert not found. Please install Calibre to enable AZW3 conversion.\n")
+		output += colors.Warning("Warning: ebook-convert not found. Please install Calibre to enable format conversion.\n")
 		output += "Download from: https://calibre-ebook.com/download\n"
 		return output
 	}
@@ -236,73 +274,110 @@ func performAZW3Conversion(cbzFile string) string {
 	conv := converter.NewConverter()
 	conv.DeleteSource = false // Keep CBZ file by default
 
-	output += fmt.Sprintf("Converting %s to AZW3 format...\n", cbzFile)
+	// Set output directory if specified
+	if outputDir := filepath.Dir(cbzFile); outputDir != "." {
+		conv.OutputDir = outputDir
+	}
+
+	formatName := format[1:] // Remove the dot
+	output += fmt.Sprintf("Converting %s to %s format...\n", cbzFile, strings.ToUpper(formatName))
 
 	// Generate output filename
-	azw3File := conv.GenerateOutputPath(cbzFile, ".azw3")
+	outputFile := conv.GenerateOutputPath(cbzFile, format)
 
-	result, err := conv.ConvertCBZToAZW3(cbzFile, azw3File)
+	// Remove existing output file if it exists
+	if _, err := os.Stat(outputFile); err == nil {
+		os.Remove(outputFile)
+	}
+
+	var result *converter.ConversionResult
+	var err error
+
+	if format == ".azw3" {
+		result, err = conv.ConvertCBZToAZW3(cbzFile, outputFile)
+	} else {
+		result, err = conv.ConvertCBZToFormat(cbzFile, outputFile, formatName)
+	}
+
 	if err != nil {
-		output += colors.Error(fmt.Sprintf("❌ Error converting to AZW3: %v\n", err))
+		output += colors.Error(fmt.Sprintf("Error converting to %s: %v\n", strings.ToUpper(formatName), err))
 		return output
 	}
 
 	if result.Success {
-		output += fmt.Sprintf("Successfully converted to AZW3: %s (%d bytes)\n", result.OutputFile, result.BytesWritten)
+		output += fmt.Sprintf("Successfully converted to %s: %s (%d bytes)\n", strings.ToUpper(formatName), result.OutputFile, result.BytesWritten)
 	} else {
-		output += colors.Error(fmt.Sprintf("AZW3 conversion failed: %v\n", result.Error))
+		output += colors.Error(fmt.Sprintf("%s conversion failed: %v\n", strings.ToUpper(formatName), result.Error))
 	}
 
 	return output
 }
 
+// expandPath expands ~ to home directory in file paths
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if usr, err := user.Current(); err == nil {
+			return filepath.Join(usr.HomeDir, path[2:])
+		}
+	}
+	return path
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: mango <url> [chapter_range] [--download] [--cbz] [--azw3]")
-		fmt.Println("Example: mango https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece")
-		fmt.Println("Example: mango https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1")
-		fmt.Println("Example: mango https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-5")
-		fmt.Println("Example: mango https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1,3,5-10")
-		fmt.Println("Example: mango https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-3 --download --cbz")
-		fmt.Println("Example: mango https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-3 --download --cbz --azw3")
-		fmt.Println("Use --download flag to actually download pages (default: just list URLs)")
-		fmt.Println("Use --cbz flag to save downloaded pages as CBZ file (requires --download)")
-		fmt.Println("Use --azw3 flag to convert CBZ to AZW3 format for Kindle (requires --cbz and Calibre)")
+		fmt.Println("Usage: mango <url> [chapter_range] [--azw3] [--epub] [--output <dir>]")
+		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece")
+		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1")
+		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-5")
+		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1,3,5-10")
+		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-3 --azw3")
+		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-3 --epub")
+		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-3 --azw3 --output ~/Downloads/")
+		fmt.Println("")
+		fmt.Println("Flags:")
+		fmt.Println("  --azw3           Download and convert to AZW3 format for Kindle")
+		fmt.Println("  --epub           Download and convert to EPUB format")
+		fmt.Println("  --output <dir>   Save files to specified directory (supports ~/)")
+		fmt.Println("")
+		fmt.Println("Notes:")
+		fmt.Println("  • Without format flags, creates CBZ file only")
+		fmt.Println("  • Requires Calibre for AZW3/EPUB conversion")
+		fmt.Println("  • Files automatically overwrite existing ones")
 		return
 	}
 
 	url := os.Args[1]
 	var chapterRange string
-	download := false
-	saveCBZ := false
+	var outputDir string
 	convertToAZW3 := false
+	convertToEPUB := false
 
 	// Parse remaining arguments
 	for i := 2; i < len(os.Args); i++ {
 		arg := os.Args[i]
-		if arg == "--download" {
-			download = true
-		} else if arg == "--cbz" {
-			saveCBZ = true
-		} else if arg == "--azw3" {
+		if arg == "--azw3" || arg == "--awz3" {
 			convertToAZW3 = true
-		} else if chapterRange == "" {
+		} else if arg == "--epub" {
+			convertToEPUB = true
+		} else if arg == "--output" && i+1 < len(os.Args) {
+			outputDir = expandPath(os.Args[i+1])
+			i++ // Skip the next argument since it's the output directory
+		} else if chapterRange == "" && !strings.HasPrefix(arg, "--") {
 			chapterRange = arg
 		}
 	}
 
-	// Validate flags
-	if saveCBZ && !download {
-		colors.ErrorPrintf("Error: --cbz flag requires --download flag\n")
-		return
+	// Auto-enable download and CBZ if conversion format is specified
+	download := convertToAZW3 || convertToEPUB
+	saveCBZ := convertToAZW3 || convertToEPUB
+
+	// If no conversion format specified, just download and create CBZ
+	if !convertToAZW3 && !convertToEPUB {
+		download = true
+		saveCBZ = true
 	}
 
-	if convertToAZW3 && !saveCBZ {
-		colors.ErrorPrintf("Error: --azw3 flag requires --cbz flag\n")
-		return
-	}
-
-	content, err := FetchURLContent(url, chapterRange, download, saveCBZ, convertToAZW3)
+	content, err := FetchURLContent(url, chapterRange, download, saveCBZ, convertToAZW3, convertToEPUB, outputDir)
 	if err != nil {
 		colors.ErrorPrintf("Error: %v\n", err)
 		return

@@ -63,7 +63,7 @@ func TestFetchURLContent_Success(t *testing.T) {
 	// Test with a real mangadex URL - this will make actual API calls
 	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
 
-	content, err := FetchURLContent(testURL, "", false, false, false)
+	content, err := FetchURLContent(testURL, "", false, false, false, false)
 	if err != nil {
 		t.Skipf("Skipping test due to API error (network/rate limit): %v", err)
 		return
@@ -83,7 +83,7 @@ func TestFetchURLContent_Success(t *testing.T) {
 func TestFetchURLContent_UnsupportedSite(t *testing.T) {
 	testURL := "https://example.com/manga"
 
-	content, err := FetchURLContent(testURL, "", false, false, false)
+	content, err := FetchURLContent(testURL, "", false, false, false, false)
 	if err == nil {
 		t.Error("Expected error for unsupported site, but got none")
 	}
@@ -102,7 +102,7 @@ func TestFetchURLContent_UnsupportedSite(t *testing.T) {
 func TestFetchURLContent_InvalidURL(t *testing.T) {
 	testURL := "not-a-valid-url"
 
-	content, err := FetchURLContent(testURL, "", false, false, false)
+	content, err := FetchURLContent(testURL, "", false, false, false, false)
 	if err == nil {
 		t.Error("Expected error for invalid URL, but got none")
 	}
@@ -116,7 +116,7 @@ func TestFetchURLContent_InvalidURL(t *testing.T) {
 func TestFetchURLContent_EmptyURL(t *testing.T) {
 	testURL := ""
 
-	content, err := FetchURLContent(testURL, "", false, false, false)
+	content, err := FetchURLContent(testURL, "", false, false, false, false)
 	if err == nil {
 		t.Error("Expected error for empty URL, but got none")
 	}
@@ -216,7 +216,7 @@ func TestFetchChapterRange(t *testing.T) {
 	testURL := "https://mangadex.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece"
 
 	// Test fetching a specific chapter
-	content, err := FetchURLContent(testURL, "1", false, false, false)
+	content, err := FetchURLContent(testURL, "1", false, false, false, false)
 	if err != nil {
 		t.Skipf("Skipping test due to API error (network/rate limit): %v", err)
 		return

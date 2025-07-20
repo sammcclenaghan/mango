@@ -182,3 +182,77 @@ func BundleChapters(filename string, chapters map[string][]*downloader.File, pro
 
 	return ArchiveCBZ(filename, allFiles, progress)
 }
+
+// ArchiveCBZWithChapterInfo archives files with chapter-aware naming for better organization
+func ArchiveCBZWithChapterInfo(filename string, chapterFiles map[float64][]*downloader.File, progress ProgressCallback) error {
+	if len(chapterFiles) == 0 {
+		return errors.New("no files to pack")
+	}
+
+	// Ensure the filename has .cbz extension
+	if !strings.HasSuffix(strings.ToLower(filename), ".cbz") {
+		filename += ".cbz"
+	}
+
+	// Create the directory if it doesn't exist
+	dir := filepath.Dir(filename)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
+	}
+
+	// Create the CBZ file
+	buff, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("file %s already exists", filename)
+		}
+		return fmt.Errorf("failed to create file %s: %w", filename, err)
+	}
+	defer buff.Close()
+
+	w := zip.NewWriter(buff)
+	defer w.Close()
+
+	fileIndex := 0
+	// Sort chapters by number for consistent ordering
+	var chapterNumbers []float64
+	for chapterNum := range chapterFiles {
+		chapterNumbers = append(chapterNumbers, chapterNum)
+	}
+
+	// Simple sort for chapter numbers
+	for i := 0; i < len(chapterNumbers); i++ {
+		for j := i + 1; j < len(chapterNumbers); j++ {
+			if chapterNumbers[i] > chapterNumbers[j] {
+				chapterNumbers[i], chapterNumbers[j] = chapterNumbers[j], chapterNumbers[i]
+			}
+		}
+	}
+
+	for _, chapterNum := range chapterNumbers {
+		files := chapterFiles[chapterNum]
+		for _, file := range files {
+			// Use chapter number and page number for unique filename
+			filename := fmt.Sprintf("ch%02.0f_p%03d.jpg", chapterNum, file.Page)
+
+			f, err := w.Create(filename)
+			if err != nil {
+				return fmt.Errorf("failed to create entry %s: %w", filename, err)
+			}
+
+			if _, err = f.Write(file.Data); err != nil {
+				return fmt.Errorf("failed to write data for %s: %w", filename, err)
+			}
+
+			// Report progress
+			if progress != nil {
+				progress(1, fileIndex)
+			}
+			fileIndex++
+		}
+	}
+
+	return nil
+}
