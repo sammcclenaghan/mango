@@ -16,7 +16,7 @@ import (
 )
 
 // FetchURLContent fetches the content from the given URL and returns it as a string.
-func FetchURLContent(url string, chapterRange string, download bool, saveCBZ bool, convertToAZW3 bool, convertToEPUB bool, outputDir string) (string, error) {
+func FetchURLContent(url string, chapterRange string, download bool, saveCBZ bool, convertToAZW3 bool, convertToEPUB bool, outputDir string, listOnly bool) (string, error) {
 	// Create a base grabber
 	g := &grabber.Grabber{
 		URL: url,
@@ -55,6 +55,10 @@ func FetchURLContent(url string, chapterRange string, download bool, saveCBZ boo
 	output += fmt.Sprintf("Found %d chapters:\n\n", len(chapters))
 
 	// If a specific chapter range is requested, fetch those chapters
+	if listOnly {
+		return listAvailableChapters(title, chapters)
+	}
+
 	if chapterRange != "" {
 		colors.DebugPrintf("Debug: Looking for chapter range %s\n", chapterRange)
 		colors.DebugPrintf("Debug: Available chapters: %d\n", len(chapters))
@@ -103,12 +107,61 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 	}
 
 	if len(selectedChapters) == 0 {
-		// List available chapters for debugging
-		availableChapters := ""
+		// Create a more helpful error message with suggestions
+		var availableNumbers []float64
 		for _, ch := range chapters {
-			availableChapters += fmt.Sprintf("%.1f ", ch.GetNumber())
+			availableNumbers = append(availableNumbers, ch.GetNumber())
 		}
-		return "", fmt.Errorf("no chapters found for range %s. Available chapters: %s", chapterRange, availableChapters)
+
+		// Sort chapters for better display
+		for i := 0; i < len(availableNumbers); i++ {
+			for j := i + 1; j < len(availableNumbers); j++ {
+				if availableNumbers[i] > availableNumbers[j] {
+					availableNumbers[i], availableNumbers[j] = availableNumbers[j], availableNumbers[i]
+				}
+			}
+		}
+
+		// Build available chapters string (limit to first 20 for readability)
+		availableStr := ""
+		displayCount := len(availableNumbers)
+		if displayCount > 20 {
+			displayCount = 20
+		}
+
+		for i := 0; i < displayCount; i++ {
+			if availableNumbers[i] == float64(int64(availableNumbers[i])) {
+				availableStr += fmt.Sprintf("%.0f ", availableNumbers[i])
+			} else {
+				availableStr += fmt.Sprintf("%.1f ", availableNumbers[i])
+			}
+		}
+
+		if len(availableNumbers) > 20 {
+			availableStr += "... (and more)"
+		}
+
+		// Suggest some ranges based on available chapters
+		suggestions := ""
+		if len(availableNumbers) > 0 {
+			first := availableNumbers[0]
+			if len(availableNumbers) >= 3 {
+				third := availableNumbers[2]
+				if first == float64(int64(first)) && third == float64(int64(third)) {
+					suggestions = fmt.Sprintf("\nTry: %.0f-%.0f or %.0f", first, third, first)
+				} else {
+					suggestions = fmt.Sprintf("\nTry: %.1f-%.1f or %.1f", first, third, first)
+				}
+			} else {
+				if first == float64(int64(first)) {
+					suggestions = fmt.Sprintf("\nTry: %.0f", first)
+				} else {
+					suggestions = fmt.Sprintf("\nTry: %.1f", first)
+				}
+			}
+		}
+
+		return "", fmt.Errorf("no chapters found for range %s.\nAvailable chapters: %s%s", chapterRange, availableStr, suggestions)
 	}
 
 	// Build initial output
@@ -142,7 +195,11 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 		// Fetch the chapter with its pages
 		chapterWithPages, err := mangadx.FetchChapter(selectedChapter)
 		if err != nil {
-			colors.ErrorPrintf("❌ Error fetching chapter %.1f: %v\n", selectedChapter.GetNumber(), err)
+			if strings.Contains(err.Error(), "404") {
+				colors.ErrorPrintf("Chapter %.0f not available (404 - possibly licensed/removed)\n", selectedChapter.GetNumber())
+			} else {
+				colors.ErrorPrintf("Error fetching chapter %.0f: %v\n", selectedChapter.GetNumber(), err)
+			}
 			continue
 		}
 
@@ -158,7 +215,11 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 
 		files, err := downloader.FetchChapter(mangadx, chapterWithPages, progressCallback)
 		if err != nil {
-			colors.ErrorPrintf("Error downloading chapter %.1f: %v\n", chapterWithPages.Number, err)
+			if strings.Contains(err.Error(), "404") {
+				colors.ErrorPrintf("Chapter %.0f pages not available (404 - possibly licensed/removed)\n", chapterWithPages.Number)
+			} else {
+				colors.ErrorPrintf("Error downloading chapter %.0f: %v\n", chapterWithPages.Number, err)
+			}
 			continue
 		}
 
@@ -166,6 +227,10 @@ func fetchChapterRange(mangadx *grabber.Mangadx, chapters grabber.Filterables, c
 		chapterFiles[chapterWithPages.Number] = files
 		allFiles = append(allFiles, files...)
 		colors.SavedPrintf("saving %s chapter %.0f\n", title, chapterWithPages.Number)
+	}
+
+	if len(downloadedChapters) == 0 {
+		return "", fmt.Errorf("no chapters could be downloaded.\n\nThis manga may be:\n• Officially licensed and removed from MangaDx\n• Restricted in your region\n• Temporarily unavailable\n\nSuggestions:\n• Try a different manga series\n• Check official sources like Viz, Crunchyroll, or publisher websites\n• Use --list to verify available chapters")
 	}
 
 	output += fmt.Sprintf("\nTotal downloaded: %d pages from %d chapters\n", len(allFiles), len(downloadedChapters))
@@ -323,10 +388,52 @@ func expandPath(path string) string {
 	return path
 }
 
+// listAvailableChapters formats and returns a list of all available chapters
+func listAvailableChapters(title string, chapters grabber.Filterables) (string, error) {
+	if len(chapters) == 0 {
+		return fmt.Sprintf("Title: %s\nNo chapters available.\n", title), nil
+	}
+
+	// Collect and sort chapter numbers
+	var chapterNumbers []float64
+	chapterMap := make(map[float64]grabber.Filterable)
+	for _, ch := range chapters {
+		num := ch.GetNumber()
+		if _, exists := chapterMap[num]; !exists {
+			chapterNumbers = append(chapterNumbers, num)
+			chapterMap[num] = ch
+		}
+	}
+
+	// Sort chapters
+	for i := 0; i < len(chapterNumbers); i++ {
+		for j := i + 1; j < len(chapterNumbers); j++ {
+			if chapterNumbers[i] > chapterNumbers[j] {
+				chapterNumbers[i], chapterNumbers[j] = chapterNumbers[j], chapterNumbers[i]
+			}
+		}
+	}
+
+	// Build output
+	output := fmt.Sprintf("Title: %s\nAvailable chapters (%d total):\n\n", title, len(chapterNumbers))
+
+	for _, num := range chapterNumbers {
+		ch := chapterMap[num]
+		if num == float64(int64(num)) {
+			output += fmt.Sprintf("Chapter %.0f: %s (%s)\n", num, ch.GetTitle(), ch.GetLanguage())
+		} else {
+			output += fmt.Sprintf("Chapter %.1f: %s (%s)\n", num, ch.GetTitle(), ch.GetLanguage())
+		}
+	}
+
+	return output, nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: mango <url> [chapter_range] [--azw3] [--epub] [--output <dir>]")
+		fmt.Println("Usage: mango <url> [chapter_range] [--azw3] [--epub] [--list] [--output <dir>]")
 		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece")
+		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece --list")
 		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1")
 		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-5")
 		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1,3,5-10")
@@ -335,6 +442,7 @@ func main() {
 		fmt.Println("Example: mango https://mangadx.org/title/a1c7c817-4e59-43b7-9365-09675a149a6f/one-piece 1-3 --azw3 --output ~/Downloads/")
 		fmt.Println("")
 		fmt.Println("Flags:")
+		fmt.Println("  --list           Show all available chapters")
 		fmt.Println("  --azw3           Download and convert to AZW3 format for Kindle")
 		fmt.Println("  --epub           Download and convert to EPUB format")
 		fmt.Println("  --output <dir>   Save files to specified directory (supports ~/)")
@@ -343,6 +451,8 @@ func main() {
 		fmt.Println("  • Without format flags, creates CBZ file only")
 		fmt.Println("  • Requires Calibre for AZW3/EPUB conversion")
 		fmt.Println("  • Files automatically overwrite existing ones")
+		fmt.Println("  • Some chapters may be unavailable due to licensing")
+		fmt.Println("  • Use --list to see what chapters are actually available")
 		return
 	}
 
@@ -351,6 +461,7 @@ func main() {
 	var outputDir string
 	convertToAZW3 := false
 	convertToEPUB := false
+	listOnly := false
 
 	// Parse remaining arguments
 	for i := 2; i < len(os.Args); i++ {
@@ -359,6 +470,8 @@ func main() {
 			convertToAZW3 = true
 		} else if arg == "--epub" {
 			convertToEPUB = true
+		} else if arg == "--list" {
+			listOnly = true
 		} else if arg == "--output" && i+1 < len(os.Args) {
 			outputDir = expandPath(os.Args[i+1])
 			i++ // Skip the next argument since it's the output directory
@@ -377,7 +490,7 @@ func main() {
 		saveCBZ = true
 	}
 
-	content, err := FetchURLContent(url, chapterRange, download, saveCBZ, convertToAZW3, convertToEPUB, outputDir)
+	content, err := FetchURLContent(url, chapterRange, download, saveCBZ, convertToAZW3, convertToEPUB, outputDir, listOnly)
 	if err != nil {
 		colors.ErrorPrintf("Error: %v\n", err)
 		return
