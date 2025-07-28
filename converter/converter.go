@@ -67,7 +67,7 @@ func (c *Converter) ConvertCBZToAZW3(inputFile string, outputFile string) (*Conv
 	}
 
 	// Run ebook-convert command
-	cmd := exec.Command("ebook-convert", inputFile, outputFile)
+	cmd := exec.Command("/Applications/calibre.app/Contents/MacOS/ebook-convert", inputFile, outputFile)
 
 	// Capture output for debugging
 	output, err := cmd.CombinedOutput()
@@ -121,7 +121,7 @@ func (c *Converter) ConvertCBZToEPUB(inputFile string, outputFile string) (*Conv
 	}
 
 	// Run ebook-convert command
-	cmd := exec.Command("ebook-convert", inputFile, outputFile)
+	cmd := exec.Command("/Applications/calibre.app/Contents/MacOS/ebook-convert", inputFile, outputFile)
 
 	// Capture output for debugging
 	output, err := cmd.CombinedOutput()
@@ -323,7 +323,7 @@ func (c *Converter) ConvertCBZToFormat(inputFile, outputFile, format string) (*C
 
 // checkEbookConvert verifies that ebook-convert is available
 func (c *Converter) checkEbookConvert() error {
-	_, err := exec.LookPath("ebook-convert")
+	_, err := exec.LookPath("/Applications/calibre.app/Contents/MacOS/ebook-convert")
 	if err != nil {
 		return fmt.Errorf("ebook-convert not found. Please install Calibre: https://calibre-ebook.com/download")
 	}
@@ -332,7 +332,7 @@ func (c *Converter) checkEbookConvert() error {
 
 // IsEbookConvertAvailable checks if ebook-convert is available on the system
 func IsEbookConvertAvailable() bool {
-	_, err := exec.LookPath("ebook-convert")
+	_, err := exec.LookPath("/Applications/calibre.app/Contents/MacOS/ebook-convert")
 	return err == nil
 }
 
